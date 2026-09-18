@@ -45,6 +45,25 @@ class TestGetInstanceId:
         assert id1 == id2
 
 
+class TestIsLoopbackHost:
+    """Tests for is_loopback_host helper."""
+
+    def test_loopback_addresses(self):
+        """Loopback hosts should be recognized."""
+        from freecad_mcp.server import is_loopback_host
+
+        assert is_loopback_host("127.0.0.1") is True
+        assert is_loopback_host("localhost") is True
+        assert is_loopback_host("::1") is True
+
+    def test_non_loopback_addresses(self):
+        """Non-loopback hosts should not be recognized."""
+        from freecad_mcp.server import is_loopback_host
+
+        assert is_loopback_host("0.0.0.0") is False  # noqa: S104
+        assert is_loopback_host("192.168.1.100") is False
+
+
 class TestGetBridge:
     """Tests for get_bridge function."""
 
@@ -223,6 +242,30 @@ class TestRegisterAllComponents:
         assert mcp.name == "freecad-mcp"
 
 
+class TestApplyCliArgsToEnv:
+    """Tests for CLI argument to environment mapping."""
+
+    def test_http_host_maps_to_env(self):
+        """--http-host should set FREECAD_HTTP_HOST."""
+        from argparse import Namespace
+
+        import freecad_mcp.server as server_module
+
+        args = Namespace(
+            mode=None,
+            transport=None,
+            host=None,
+            port=None,
+            http_host="0.0.0.0",  # noqa: S104
+            http_port=None,
+            log_level=None,
+        )
+
+        with patch.dict(os.environ, {}, clear=True):
+            server_module.apply_cli_args_to_env(args)
+            assert os.environ["FREECAD_HTTP_HOST"] == "0.0.0.0"  # noqa: S104
+
+
 class TestMain:
     """Tests for main function."""
 
@@ -300,6 +343,7 @@ class TestMain:
         mock_config.log_level = "INFO"
         mock_config.mode = FreecadMode.EMBEDDED
         mock_config.transport = TransportType.HTTP
+        mock_config.http_host = "127.0.0.1"
         mock_config.http_port = 8080
 
         with (
@@ -310,11 +354,59 @@ class TestMain:
         ):
             server_module.main()
 
-            # Should call run with HTTP transport settings
-            mock_run.assert_called_once()
-            call_kwargs = mock_run.call_args.kwargs
-            assert call_kwargs.get("transport") == "streamable-http"
-            assert call_kwargs.get("port") == 8080
+            # Verify settings were set correctly BEFORE run() was called
+            assert server_module.mcp.settings.host == "127.0.0.1"
+            assert server_module.mcp.settings.port == 8080
+            assert server_module.mcp.settings.log_level == "INFO"
+
+            # Loopback binding keeps the default transport-security allowlist
+            transport_security = getattr(
+                server_module.mcp.settings, "transport_security", None
+            )
+            if transport_security is not None:
+                assert transport_security.enable_dns_rebinding_protection is True
+                assert all(
+                    not host.startswith("0.0.0.0")  # noqa: S104
+                    for host in transport_security.allowed_hosts
+                )
+
+            # Verify run() was called with HTTP transport
+            mock_run.assert_called_once_with(transport="streamable-http")
+
+    def test_main_http_transport_remote_host_widens_security(self):
+        """A non-loopback bind must widen the host allowlist and warn."""
+        import freecad_mcp.server as server_module
+        from freecad_mcp.config import TransportType
+
+        mock_config = MagicMock()
+        mock_config.log_level = "INFO"
+        mock_config.mode = FreecadMode.EMBEDDED
+        mock_config.transport = TransportType.HTTP
+        mock_config.http_host = "0.0.0.0"  # noqa: S104
+        mock_config.http_port = 8080
+
+        with (
+            patch.object(sys, "argv", DEFAULT_ARGV),
+            patch.object(server_module, "get_config", return_value=mock_config),
+            patch.object(server_module.mcp, "run") as mock_run,
+            patch.object(server_module.logger, "warning") as mock_warning,
+            patch("builtins.print"),
+        ):
+            server_module.main()
+
+            assert server_module.mcp.settings.host == "0.0.0.0"  # noqa: S104
+            assert server_module.mcp.settings.port == 8080
+
+            transport_security = getattr(
+                server_module.mcp.settings, "transport_security", None
+            )
+            if transport_security is not None:
+                assert transport_security.enable_dns_rebinding_protection is True
+                assert "0.0.0.0:*" in transport_security.allowed_hosts
+                assert "127.0.0.1:*" in transport_security.allowed_hosts
+
+            mock_warning.assert_called_once()
+            mock_run.assert_called_once_with(transport="streamable-http")
 
     def test_main_stdio_transport(self):
         """Main should start stdio transport by default."""

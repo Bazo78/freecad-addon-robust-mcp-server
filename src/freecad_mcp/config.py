@@ -42,6 +42,7 @@ class ServerConfig(BaseSettings):
         timeout_ms: Default execution timeout in milliseconds.
         max_output_size: Maximum output size in bytes.
         transport: MCP transport type.
+        http_host: Bind address for HTTP transport (default: loopback).
         http_port: Port for HTTP transport.
         log_level: Logging level.
     """
@@ -89,6 +90,10 @@ class ServerConfig(BaseSettings):
 
     # MCP transport settings
     transport: TransportType = TransportType.STDIO
+    http_host: Annotated[
+        str,
+        Field(description="HTTP server bind address (default: loopback)"),
+    ] = "127.0.0.1"
     http_port: Annotated[
         int,
         Field(ge=1, le=65535, description="HTTP server port"),

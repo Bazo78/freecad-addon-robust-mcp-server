@@ -68,6 +68,18 @@ def get_instance_id() -> str:
     return INSTANCE_ID
 
 
+def is_loopback_host(host: str) -> bool:
+    """Check whether a host binds only to loopback interfaces.
+
+    Args:
+        host: The bind address to check.
+
+    Returns:
+        True for loopback addresses, False otherwise.
+    """
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
 async def get_bridge() -> "FreecadBridge":
     """Get the active FreeCAD bridge.
 
@@ -277,6 +289,8 @@ def apply_cli_args_to_env(args: argparse.Namespace) -> None:
             os.environ["FREECAD_XMLRPC_PORT"] = str(args.port)
         else:
             os.environ["FREECAD_SOCKET_PORT"] = str(args.port)
+    if args.http_host:
+        os.environ["FREECAD_HTTP_HOST"] = args.http_host
     if args.http_port:
         os.environ["FREECAD_HTTP_PORT"] = str(args.http_port)
     if args.log_level:
@@ -301,6 +315,10 @@ Environment Variables:
   FREECAD_SOCKET_PORT    Port for socket connection (default: 9876)
   FREECAD_XMLRPC_PORT    Port for XML-RPC connection (default: 9875)
   FREECAD_TRANSPORT      Transport type: stdio or http (default: stdio)
+  FREECAD_HTTP_HOST      Host to bind for HTTP transport (default: 127.0.0.1)
+                         Binding to a non-loopback address exposes the MCP
+                         server remotely: put it behind authentication, TLS
+                         or a trusted reverse proxy.
   FREECAD_HTTP_PORT      Port for HTTP transport (default: 8000)
   FREECAD_LOG_LEVEL      Logging level: DEBUG, INFO, WARNING, ERROR
                          (default: INFO)
@@ -360,6 +378,12 @@ Prerequisites:
         "--port",
         type=int,
         help="Port for FreeCAD connection (mode-dependent)",
+    )
+
+    parser.add_argument(
+        "--http-host",
+        help="Host/address for HTTP transport to bind to "
+        "(overrides FREECAD_HTTP_HOST; default: 127.0.0.1)",
     )
 
     parser.add_argument(
@@ -425,12 +449,37 @@ def main() -> None:
 
     # Run the server
     if config.transport == TransportType.HTTP:
-        logger.info("Starting HTTP transport on port %d", config.http_port)
-        mcp.run(  # type: ignore[call-arg]
-            transport="streamable-http",
-            host="0.0.0.0",  # noqa: S104
-            port=config.http_port,
+        # Configure FastMCP settings directly on the instance
+        # (mcp 1.27.0+ does not support host/port in run())
+        mcp.settings.host = config.http_host
+        mcp.settings.port = config.http_port
+        # log_level is validated via CLI/env choices, so this is always a valid literal
+        mcp.settings.log_level = config.log_level  # type: ignore[assignment]
+
+        if not is_loopback_host(config.http_host):
+            # Binding beyond loopback exposes the MCP server on the network.
+            # Keep DNS rebinding protection enabled and widen the host
+            # allowlist to match the configured bind address, so requests are
+            # not rejected while the listener stays reachable remotely.
+            # Remote deployments must still be secured with authentication,
+            # TLS or a trusted reverse proxy.
+            transport_security = getattr(mcp.settings, "transport_security", None)
+            if transport_security is not None:
+                transport_security.allowed_hosts = [
+                    *transport_security.allowed_hosts,
+                    f"{config.http_host}:*",
+                ]
+            logger.warning(
+                "HTTP transport bound to '%s' - remote MCP access is exposed "
+                "without authentication. Secure it with auth, TLS or a trusted "
+                "reverse proxy.",
+                config.http_host,
+            )
+
+        logger.info(
+            "Starting HTTP transport on %s:%d", config.http_host, config.http_port
         )
+        mcp.run(transport="streamable-http")
     else:
         logger.info("Starting stdio transport")
         logger.info(
