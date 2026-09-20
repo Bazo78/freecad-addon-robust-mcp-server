@@ -276,6 +276,7 @@ class TestMain:
         mock_config.log_level = "INFO"
         mock_config.mode = FreecadMode.EMBEDDED
         mock_config.transport = TransportType.STDIO
+        mock_config.http_host = "127.0.0.1"
 
         mock_mcp_instance = MagicMock()
 
@@ -309,6 +310,7 @@ class TestMain:
         mock_config.log_level = "INFO"
         mock_config.mode = FreecadMode.EMBEDDED
         mock_config.transport = TransportType.STDIO
+        mock_config.http_host = "127.0.0.1"
 
         # Ensure FREECAD_MCP_TESTING is not set
         env_without_testing = {
