@@ -366,7 +366,7 @@ class TestMain:
             assert ts is not None
             assert ts.enable_dns_rebinding_protection is True
             assert "127.0.0.1:*" in ts.allowed_hosts
-            assert "http://127.0.0.1" in ts.allowed_origins
+            assert "http://127.0.0.1:*" in ts.allowed_origins
 
             # Verify run() was called with HTTP transport
             mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
@@ -401,12 +401,83 @@ class TestMain:
             ts = call_kwargs["transport_security"]
             assert ts is not None
             assert ts.enable_dns_rebinding_protection is True
-            assert "192.168.1.100" in ts.allowed_hosts
-            assert "10.0.0.1" in ts.allowed_hosts
-            assert "http://192.168.1.100" in ts.allowed_origins
-            assert "http://10.0.0.1" in ts.allowed_origins
+            assert "192.168.1.100:*" in ts.allowed_hosts
+            assert "10.0.0.1:*" in ts.allowed_hosts
+            assert "http://192.168.1.100:*" in ts.allowed_origins
+            assert "http://10.0.0.1:*" in ts.allowed_origins
 
             mock_warning.assert_called_once()
+            mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
+
+    def test_main_http_transport_ipv6_allowed_hosts(self) -> None:
+        """IPv6 loopback bind must bracket the host in allowlists."""
+        import freecad_mcp.server as server_module
+        from freecad_mcp.config import TransportType
+
+        mock_config = MagicMock()
+        mock_config.log_level = "INFO"
+        mock_config.mode = FreecadMode.EMBEDDED
+        mock_config.transport = TransportType.HTTP
+        mock_config.http_host = "::1"
+        mock_config.http_port = 8080
+
+        mock_mcp_instance = MagicMock()
+
+        with (
+            patch.object(sys, "argv", DEFAULT_ARGV),
+            patch.object(server_module, "get_config", return_value=mock_config),
+            patch.object(
+                server_module, "FastMCP", return_value=mock_mcp_instance
+            ) as mock_fastmcp,
+            patch("builtins.print"),
+        ):
+            server_module.main()
+
+            call_kwargs = mock_fastmcp.call_args.kwargs
+            ts = call_kwargs["transport_security"]
+            assert ts is not None
+            assert ts.enable_dns_rebinding_protection is True
+            # Loopback bind: IPv6 must be bracketed
+            assert "[::1]:*" in ts.allowed_hosts
+            assert "http://[::1]:*" in ts.allowed_origins
+
+            mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
+
+    def test_main_http_transport_non_loopback_ipv6_hosts(self) -> None:
+        """Non-loopback bind with IPv6 in http_allowed_hosts must bracket them."""
+        import freecad_mcp.server as server_module
+        from freecad_mcp.config import TransportType
+
+        mock_config = MagicMock()
+        mock_config.log_level = "INFO"
+        mock_config.mode = FreecadMode.EMBEDDED
+        mock_config.transport = TransportType.HTTP
+        mock_config.http_host = "0.0.0.0"  # noqa: S104
+        mock_config.http_port = 8080
+        mock_config.http_allowed_hosts = "192.168.1.100,::2"
+
+        mock_mcp_instance = MagicMock()
+
+        with (
+            patch.object(sys, "argv", DEFAULT_ARGV),
+            patch.object(server_module, "get_config", return_value=mock_config),
+            patch.object(
+                server_module, "FastMCP", return_value=mock_mcp_instance
+            ) as mock_fastmcp,
+            patch("builtins.print"),
+        ):
+            server_module.main()
+
+            call_kwargs = mock_fastmcp.call_args.kwargs
+            ts = call_kwargs["transport_security"]
+            assert ts is not None
+            # IPv4 host
+            assert "192.168.1.100:*" in ts.allowed_hosts
+            assert "http://192.168.1.100:*" in ts.allowed_origins
+            # IPv6 host must be bracketed
+            assert "[::2]:*" in ts.allowed_hosts
+            assert "http://[::2]:*" in ts.allowed_origins
+
             mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
 
     def test_main_http_transport_non_loopback_requires_allowed_hosts(self) -> None:

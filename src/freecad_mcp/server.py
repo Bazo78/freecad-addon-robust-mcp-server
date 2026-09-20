@@ -83,14 +83,37 @@ def is_loopback_host(host: str) -> bool:
 
 
 def _format_host(host: str) -> str:
-    """Bracket an IPv6 address, leave IPv4 and hostnames unbracketed."""
+    """Bracket an IPv6 address for use in HTTP authority strings.
+
+    IPv6 addresses in HTTP headers and URLs must be enclosed in square brackets
+    (e.g. ``[::1]``) to avoid ambiguity with the colon-separated port syntax.
+    IPv4 addresses and hostnames are returned unchanged.
+
+    Args:
+        host: A hostname, IPv4 address, or bare IPv6 address string.
+
+    Returns:
+        The formatted host string with brackets around IPv6 addresses.
+    """
     if _is_ipv6(host) and not host.startswith("["):
         return f"[{host}]"
     return host
 
 
 def _is_ipv6(host: str) -> bool:
-    """Check if a host string is an IPv6 address."""
+    """Detect whether a host string is a bare IPv6 address.
+
+    An address is considered IPv6 if it contains a colon. Already-bracketed
+    addresses (e.g. ``[::1]``) are **not** detected as IPv6 by this helper;
+    use :func:`_format_host` to apply brackets when needed.
+
+    Args:
+        host: A hostname or IP address string.
+
+    Returns:
+        ``True`` if *host* contains a colon (i.e. is an unbracketed IPv6 address),
+        ``False`` otherwise.
+    """
     return ":" in host
 
 
@@ -112,7 +135,7 @@ def _build_transport_security(config: "ServerConfig") -> TransportSecuritySettin
         return TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
             allowed_hosts=[f"{host}:*"],
-            allowed_origins=[f"http://{host}"],
+            allowed_origins=[f"http://{host}:*"],
         )
 
     # Non-loopback: require explicit allowlist
@@ -124,10 +147,14 @@ def _build_transport_security(config: "ServerConfig") -> TransportSecuritySettin
         )
 
     allowed_hosts = [
-        h.strip() for h in config.http_allowed_hosts.split(",") if h.strip()
+        f"{_format_host(h.strip())}:*"
+        for h in config.http_allowed_hosts.split(",")
+        if h.strip()
     ]
     allowed_origins = [
-        f"http://{h.strip()}" for h in config.http_allowed_hosts.split(",") if h.strip()
+        f"http://{_format_host(h.strip())}:*"
+        for h in config.http_allowed_hosts.split(",")
+        if h.strip()
     ]
 
     return TransportSecuritySettings(
