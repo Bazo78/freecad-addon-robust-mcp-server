@@ -82,6 +82,18 @@ def is_loopback_host(host: str) -> bool:
     return host in {"127.0.0.1", "localhost", "::1"}
 
 
+def _format_host(host: str) -> str:
+    """Bracket an IPv6 address, leave IPv4 and hostnames unbracketed."""
+    if _is_ipv6(host) and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
+def _is_ipv6(host: str) -> bool:
+    """Check if a host string is an IPv6 address."""
+    return ":" in host
+
+
 def _build_transport_security(config: "ServerConfig") -> TransportSecuritySettings:
     """Build transport security settings from configuration.
 
@@ -91,21 +103,32 @@ def _build_transport_security(config: "ServerConfig") -> TransportSecuritySettin
     Returns:
         TransportSecuritySettings with explicit allowlist for both
         loopback and non-loopback binds.
+
+    Raises:
+        ValueError: If http_host is non-loopback and http_allowed_hosts is empty.
     """
     if is_loopback_host(config.http_host):
+        host = _format_host(config.http_host)
         return TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
-            allowed_hosts=["127.0.0.1:*"],
-            allowed_origins=["127.0.0.1:*"],
+            allowed_hosts=[f"{host}:*"],
+            allowed_origins=[f"http://{host}"],
         )
 
-    # Non-loopback: allowlist per il bind configurato
-    allowed_hosts = [f"{config.http_host}:*"]
-    allowed_origins = [f"{config.http_host}:*"]
-    if config.http_allowed_hosts:
-        extra = [h.strip() for h in config.http_allowed_hosts.split(",") if h.strip()]
-        allowed_hosts.extend(extra)
-        allowed_origins.extend(extra)
+    # Non-loopback: require explicit allowlist
+    if not config.http_allowed_hosts:
+        raise ValueError(
+            f"http_allowed_hosts is required when binding to non-loopback "
+            f"host '{config.http_host}'. Set FREECAD_HTTP_ALLOWED_HOSTS or "
+            f"--http-allowed-hosts to a comma-separated list of allowed hosts."
+        )
+
+    allowed_hosts = [
+        h.strip() for h in config.http_allowed_hosts.split(",") if h.strip()
+    ]
+    allowed_origins = [
+        f"http://{h.strip()}" for h in config.http_allowed_hosts.split(",") if h.strip()
+    ]
 
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,

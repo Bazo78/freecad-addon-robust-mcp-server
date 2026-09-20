@@ -366,12 +366,13 @@ class TestMain:
             assert ts is not None
             assert ts.enable_dns_rebinding_protection is True
             assert "127.0.0.1:*" in ts.allowed_hosts
+            assert "http://127.0.0.1" in ts.allowed_origins
 
             # Verify run() was called with HTTP transport
             mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
 
     def test_main_http_transport_remote_host_widens_security(self) -> None:
-        """A non-loopback bind must widen the host allowlist and warn."""
+        """A non-loopback bind with explicit allowlist must use allowlist entries."""
         import freecad_mcp.server as server_module
         from freecad_mcp.config import TransportType
 
@@ -381,7 +382,7 @@ class TestMain:
         mock_config.transport = TransportType.HTTP
         mock_config.http_host = "0.0.0.0"  # noqa: S104
         mock_config.http_port = 8080
-        mock_config.http_allowed_hosts = None
+        mock_config.http_allowed_hosts = "192.168.1.100,10.0.0.1"
 
         mock_mcp_instance = MagicMock()
 
@@ -400,11 +401,34 @@ class TestMain:
             ts = call_kwargs["transport_security"]
             assert ts is not None
             assert ts.enable_dns_rebinding_protection is True
-            assert "0.0.0.0:*" in ts.allowed_hosts
-            assert "0.0.0.0:*" in ts.allowed_origins
+            assert "192.168.1.100" in ts.allowed_hosts
+            assert "10.0.0.1" in ts.allowed_hosts
+            assert "http://192.168.1.100" in ts.allowed_origins
+            assert "http://10.0.0.1" in ts.allowed_origins
 
             mock_warning.assert_called_once()
             mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
+
+    def test_main_http_transport_non_loopback_requires_allowed_hosts(self) -> None:
+        """A non-loopback bind without http_allowed_hosts must raise ValueError."""
+        import freecad_mcp.server as server_module
+        from freecad_mcp.config import TransportType
+
+        mock_config = MagicMock()
+        mock_config.log_level = "INFO"
+        mock_config.mode = FreecadMode.EMBEDDED
+        mock_config.transport = TransportType.HTTP
+        mock_config.http_host = "0.0.0.0"  # noqa: S104
+        mock_config.http_port = 8080
+        mock_config.http_allowed_hosts = None
+
+        with (
+            patch.object(sys, "argv", DEFAULT_ARGV),
+            patch.object(server_module, "get_config", return_value=mock_config),
+            patch("builtins.print"),
+        ):
+            with pytest.raises(ValueError, match="http_allowed_hosts is required"):
+                server_module.main()
 
     def test_main_stdio_transport(self) -> None:
         """Main should start stdio transport by default."""
