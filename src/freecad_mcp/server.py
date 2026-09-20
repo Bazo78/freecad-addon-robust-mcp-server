@@ -553,6 +553,12 @@ def main() -> None:
 
     register_all_components(mcp)
 
+    # Keep the package-level export synchronized so that
+    # ``from freecad_mcp import mcp`` returns the live instance.
+    import freecad_mcp
+
+    freecad_mcp.mcp = mcp
+
     # Run the server
     if config.transport == TransportType.HTTP:
         logger.info(

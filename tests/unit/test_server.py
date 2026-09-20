@@ -503,6 +503,29 @@ class TestMain:
             with pytest.raises(ValueError, match="http_allowed_hosts is required"):
                 server_module.main()
 
+    def test_main_http_transport_non_loopback_empty_after_parse(self) -> None:
+        """Whitespace-only http_allowed_hosts must raise ValueError."""
+        import freecad_mcp.server as server_module
+        from freecad_mcp.config import TransportType
+
+        mock_config = MagicMock()
+        mock_config.log_level = "INFO"
+        mock_config.mode = FreecadMode.EMBEDDED
+        mock_config.transport = TransportType.HTTP
+        mock_config.http_host = "0.0.0.0"  # noqa: S104
+        mock_config.http_port = 8080
+        mock_config.http_allowed_hosts = " , "  # whitespace-only
+
+        with (
+            patch.object(sys, "argv", DEFAULT_ARGV),
+            patch.object(server_module, "get_config", return_value=mock_config),
+            patch("builtins.print"),
+        ):
+            with pytest.raises(
+                ValueError, match="http_allowed_hosts is empty after parsing"
+            ):
+                server_module.main()
+
     def test_main_stdio_transport(self) -> None:
         """Main should start stdio transport by default."""
         import freecad_mcp.server as server_module
