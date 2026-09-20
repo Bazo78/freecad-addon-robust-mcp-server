@@ -44,6 +44,7 @@ class ServerConfig(BaseSettings):
         transport: MCP transport type.
         http_host: Bind address for HTTP transport (default: loopback).
         http_port: Port for HTTP transport.
+        http_allowed_hosts: Comma-separated host allow-list for HTTP transport.
         log_level: Logging level.
     """
 
@@ -98,6 +99,15 @@ class ServerConfig(BaseSettings):
         int,
         Field(ge=1, le=65535, description="HTTP server port"),
     ] = 8000
+    http_allowed_hosts: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Comma-separated host allow-list for HTTP transport. "
+                "Required when http_host binds beyond loopback."
+            ),
+        ),
+    ] = None
 
     # Logging
     log_level: str = "INFO"

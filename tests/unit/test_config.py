@@ -48,7 +48,7 @@ class TestServerConfig:
 
         assert config.transport == TransportType.HTTP
 
-    def test_http_host_from_env(self):
+    def test_http_host_from_env(self) -> None:
         """Configuration should read HTTP bind host from environment."""
         with mock.patch.dict(os.environ, {"FREECAD_HTTP_HOST": "0.0.0.0"}):  # noqa: S104
             config = ServerConfig()

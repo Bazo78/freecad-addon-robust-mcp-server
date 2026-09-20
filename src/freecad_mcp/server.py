@@ -41,11 +41,13 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from freecad_mcp.config import FreecadMode, TransportType, get_config
 
 if TYPE_CHECKING:
     from freecad_mcp.bridge.base import FreecadBridge
+    from freecad_mcp.config import ServerConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -78,6 +80,38 @@ def is_loopback_host(host: str) -> bool:
         True for loopback addresses, False otherwise.
     """
     return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _build_transport_security(config: "ServerConfig") -> TransportSecuritySettings:
+    """Build transport security settings from configuration.
+
+    Args:
+        config: The server configuration.
+
+    Returns:
+        TransportSecuritySettings with explicit allowlist for both
+        loopback and non-loopback binds.
+    """
+    if is_loopback_host(config.http_host):
+        return TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=["127.0.0.1:*"],
+            allowed_origins=["127.0.0.1:*"],
+        )
+
+    # Non-loopback: allowlist per il bind configurato
+    allowed_hosts = [f"{config.http_host}:*"]
+    allowed_origins = [f"{config.http_host}:*"]
+    if config.http_allowed_hosts:
+        extra = [h.strip() for h in config.http_allowed_hosts.split(",") if h.strip()]
+        allowed_hosts.extend(extra)
+        allowed_origins.extend(extra)
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
 
 
 async def get_bridge() -> "FreecadBridge":
@@ -167,33 +201,31 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
             _bridge = None
 
 
-# Create the Robust MCP Server instance with lifespan
-mcp = FastMCP(
-    name="freecad-mcp",
-    lifespan=lifespan,
-)
+# Will be created in main() with full configuration.
+# None until main() runs.
+mcp: FastMCP | None = None
 
 
-def register_all_components() -> None:
-    """Register all MCP components (tools, resources, prompts)."""
+def register_all_components(fastmcp: FastMCP) -> None:
+    """Register all MCP components (tools, resources, prompts).
+
+    Args:
+        fastmcp: The FastMCP instance to register components on.
+    """
     # Register tools
     from freecad_mcp.tools import register_all_tools
 
-    register_all_tools(mcp, get_bridge)
+    register_all_tools(fastmcp, get_bridge)
 
     # Register resources
     from freecad_mcp.resources import register_resources
 
-    register_resources(mcp, get_bridge)
+    register_resources(fastmcp, get_bridge)
 
     # Register prompts
     from freecad_mcp.prompts import register_prompts
 
-    register_prompts(mcp, get_bridge)
-
-
-# Register all components
-register_all_components()
+    register_prompts(fastmcp, get_bridge)
 
 
 async def check_freecad_connection(
@@ -403,6 +435,8 @@ Prerequisites:
 
 def main() -> None:
     """Run the FreeCAD Robust MCP Server."""
+    global mcp
+
     # Parse arguments first - this handles --help without connecting to FreeCAD
     args = parse_args()
 
@@ -447,35 +481,31 @@ def main() -> None:
     logger.info("Mode: %s", config.mode.value)
     logger.info("Transport: %s", config.transport.value)
 
+    # Build transport security BEFORE constructing FastMCP
+    transport_security = _build_transport_security(config)
+
+    if not is_loopback_host(config.http_host):
+        logger.warning(
+            "HTTP transport bound to '%s' - remote MCP access is exposed "
+            "without authentication. Secure it with auth, TLS or a trusted "
+            "reverse proxy.",
+            config.http_host,
+        )
+
+    # Create FastMCP with full configuration (including security)
+    mcp = FastMCP(
+        name="freecad-mcp",
+        lifespan=lifespan,
+        host=config.http_host,
+        port=config.http_port,
+        log_level=config.log_level,  # type: ignore[arg-type]
+        transport_security=transport_security,
+    )
+
+    register_all_components(mcp)
+
     # Run the server
     if config.transport == TransportType.HTTP:
-        # Configure FastMCP settings directly on the instance
-        # (mcp 1.27.0+ does not support host/port in run())
-        mcp.settings.host = config.http_host
-        mcp.settings.port = config.http_port
-        # log_level is validated via CLI/env choices, so this is always a valid literal
-        mcp.settings.log_level = config.log_level  # type: ignore[assignment]
-
-        if not is_loopback_host(config.http_host):
-            # Binding beyond loopback exposes the MCP server on the network.
-            # Keep DNS rebinding protection enabled and widen the host
-            # allowlist to match the configured bind address, so requests are
-            # not rejected while the listener stays reachable remotely.
-            # Remote deployments must still be secured with authentication,
-            # TLS or a trusted reverse proxy.
-            transport_security = getattr(mcp.settings, "transport_security", None)
-            if transport_security is not None:
-                transport_security.allowed_hosts = [
-                    *transport_security.allowed_hosts,
-                    f"{config.http_host}:*",
-                ]
-            logger.warning(
-                "HTTP transport bound to '%s' - remote MCP access is exposed "
-                "without authentication. Secure it with auth, TLS or a trusted "
-                "reverse proxy.",
-                config.http_host,
-            )
-
         logger.info(
             "Starting HTTP transport on %s:%d", config.http_host, config.http_port
         )
