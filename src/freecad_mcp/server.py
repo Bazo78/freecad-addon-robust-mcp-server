@@ -146,16 +146,15 @@ def _build_transport_security(config: "ServerConfig") -> TransportSecuritySettin
             f"--http-allowed-hosts to a comma-separated list of allowed hosts."
         )
 
-    allowed_hosts = [
-        f"{_format_host(h.strip())}:*"
-        for h in config.http_allowed_hosts.split(",")
-        if h.strip()
-    ]
-    allowed_origins = [
-        f"http://{_format_host(h.strip())}:*"
-        for h in config.http_allowed_hosts.split(",")
-        if h.strip()
-    ]
+    raw_hosts = [h.strip() for h in config.http_allowed_hosts.split(",") if h.strip()]
+    if not raw_hosts:
+        raise ValueError(
+            "http_allowed_hosts is empty after parsing. Provide at least one "
+            "host in FREECAD_HTTP_ALLOWED_HOSTS or --http-allowed-hosts."
+        )
+
+    allowed_hosts = [f"{_format_host(h)}:*" for h in raw_hosts]
+    allowed_origins = [f"http://{_format_host(h)}:*" for h in raw_hosts]
 
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
