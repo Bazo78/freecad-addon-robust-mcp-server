@@ -550,6 +550,30 @@ class TestMain:
             # Should call run without transport arguments (stdio is default)
             mock_mcp_instance.run.assert_called_once_with()
 
+    def test_main_stdio_transport_non_loopback_no_validation(self) -> None:
+        """Stdio transport should not validate http_allowed_hosts."""
+        import freecad_mcp.server as server_module
+        from freecad_mcp.config import TransportType
+
+        mock_config = MagicMock()
+        mock_config.log_level = "INFO"
+        mock_config.mode = FreecadMode.EMBEDDED
+        mock_config.transport = TransportType.STDIO
+        mock_config.http_host = "0.0.0.0"  # noqa: S104
+        mock_config.http_allowed_hosts = None
+
+        mock_mcp_instance = MagicMock()
+
+        with (
+            patch.object(sys, "argv", DEFAULT_ARGV),
+            patch.object(server_module, "get_config", return_value=mock_config),
+            patch.object(server_module, "FastMCP", return_value=mock_mcp_instance),
+            patch("builtins.print"),
+        ):
+            server_module.main()
+
+            mock_mcp_instance.run.assert_called_once_with()
+
 
 class TestStdioProtocolCleanliness:
     """Tests to ensure stdio mode produces clean JSON-RPC output.

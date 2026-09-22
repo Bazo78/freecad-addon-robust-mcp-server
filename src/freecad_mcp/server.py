@@ -142,15 +142,15 @@ def _build_transport_security(config: "ServerConfig") -> TransportSecuritySettin
     if not config.http_allowed_hosts:
         raise ValueError(
             f"http_allowed_hosts is required when binding to non-loopback "
-            f"host '{config.http_host}'. Set FREECAD_HTTP_ALLOWED_HOSTS or "
-            f"--http-allowed-hosts to a comma-separated list of allowed hosts."
+            f"host '{config.http_host}'. Set FREECAD_HTTP_ALLOWED_HOSTS to a "
+            f"comma-separated list of allowed hosts."
         )
 
     raw_hosts = [h.strip() for h in config.http_allowed_hosts.split(",") if h.strip()]
     if not raw_hosts:
         raise ValueError(
             "http_allowed_hosts is empty after parsing. Provide at least one "
-            "host in FREECAD_HTTP_ALLOWED_HOSTS or --http-allowed-hosts."
+            "host in FREECAD_HTTP_ALLOWED_HOSTS."
         )
 
     allowed_hosts = [f"{_format_host(h)}:*" for h in raw_hosts]
@@ -530,16 +530,17 @@ def main() -> None:
     logger.info("Mode: %s", config.mode.value)
     logger.info("Transport: %s", config.transport.value)
 
-    # Build transport security BEFORE constructing FastMCP
-    transport_security = _build_transport_security(config)
-
-    if not is_loopback_host(config.http_host):
-        logger.warning(
-            "HTTP transport bound to '%s' - remote MCP access is exposed "
-            "without authentication. Secure it with auth, TLS or a trusted "
-            "reverse proxy.",
-            config.http_host,
-        )
+    # Build transport security ONLY for HTTP transport
+    transport_security = None
+    if config.transport == TransportType.HTTP:
+        transport_security = _build_transport_security(config)
+        if not is_loopback_host(config.http_host):
+            logger.warning(
+                "HTTP transport bound to '%s' - remote MCP access is exposed "
+                "without authentication. Secure it with auth, TLS or a trusted "
+                "reverse proxy.",
+                config.http_host,
+            )
 
     # Create FastMCP with full configuration (including security)
     mcp = FastMCP(
