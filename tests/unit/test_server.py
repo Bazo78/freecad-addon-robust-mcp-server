@@ -150,6 +150,81 @@ class TestGetMcp:
 
         assert freecad_mcp.get_mcp is get_mcp
 
+    def test_main_publishes_binding_only_after_registration(self) -> None:
+        """A registration failure must leave the mcp binding unpublished."""
+        import freecad_mcp
+        import freecad_mcp.server as server_module
+        from freecad_mcp.config import TransportType
+
+        mock_config = MagicMock()
+        mock_config.log_level = "INFO"
+        mock_config.mode = FreecadMode.EMBEDDED
+        mock_config.transport = TransportType.STDIO
+        mock_config.http_host = "127.0.0.1"
+
+        # Start from a clean slate and restore afterwards, so the assertions
+        # do not depend on what other tests left behind.
+        original_server_mcp = server_module.mcp
+        original_package_mcp = freecad_mcp.mcp
+        server_module.mcp = None
+        freecad_mcp.mcp = None
+        try:
+            with (
+                patch.object(sys, "argv", DEFAULT_ARGV),
+                patch.object(server_module, "get_config", return_value=mock_config),
+                patch.object(server_module, "FastMCP", return_value=MagicMock()),
+                patch.object(
+                    server_module,
+                    "register_all_components",
+                    side_effect=RuntimeError("registration failed"),
+                ),
+                patch("builtins.print"),
+            ):
+                with pytest.raises(RuntimeError, match="registration failed"):
+                    server_module.main()
+
+            assert server_module.mcp is None
+            assert freecad_mcp.mcp is None
+        finally:
+            server_module.mcp = original_server_mcp
+            freecad_mcp.mcp = original_package_mcp
+
+    def test_main_clears_bindings_after_shutdown(self) -> None:
+        """Both bindings must be None once the transport run() returns."""
+        import freecad_mcp
+        import freecad_mcp.server as server_module
+        from freecad_mcp.config import TransportType
+
+        mock_config = MagicMock()
+        mock_config.log_level = "INFO"
+        mock_config.mode = FreecadMode.EMBEDDED
+        mock_config.transport = TransportType.STDIO
+        mock_config.http_host = "127.0.0.1"
+
+        mock_mcp_instance = MagicMock()
+
+        # Capture the binding while run() is executing (before the finally
+        # block clears it).
+        captured: list[object] = []
+
+        def _capture_binding(*_args: object, **_kwargs: object) -> None:
+            captured.append(server_module.mcp)
+
+        mock_mcp_instance.run.side_effect = _capture_binding
+
+        with (
+            patch.object(sys, "argv", DEFAULT_ARGV),
+            patch.object(server_module, "get_config", return_value=mock_config),
+            patch.object(server_module, "FastMCP", return_value=mock_mcp_instance),
+            patch("builtins.print"),
+        ):
+            server_module.main()
+
+        # Published while the transport ran, cleared after shutdown
+        assert captured and captured[0] is mock_mcp_instance
+        assert server_module.mcp is None
+        assert freecad_mcp.mcp is None
+
 
 class TestGetBridge:
     """Tests for get_bridge function."""

@@ -285,12 +285,12 @@ def get_mcp() -> FastMCP:
     """Return the live FastMCP instance created by :func:`main`.
 
     The package-level ``mcp`` name is ``None`` until ``main()`` creates the
-    server. A ``from freecad_mcp import mcp`` performed before startup
-    captures that ``None`` binding and keeps it even after ``main()``
-    assigns the real instance, so importing the name directly can leave
-    callers with a stale value. This accessor resolves the module-level
-    binding at call time instead, so it always returns the running
-    instance once ``main()`` has created it.
+    server, and back to ``None`` once the transport stops. A
+    ``from freecad_mcp import mcp`` performed before startup captures that
+    ``None`` binding and keeps it even after ``main()`` assigns the real
+    instance, so importing the name directly can leave callers with a stale
+    value. This accessor resolves the module-level binding at call time
+    instead, so it returns the running instance whenever the server is up.
 
     Returns:
         The FastMCP server instance.
@@ -300,7 +300,7 @@ def get_mcp() -> FastMCP:
 
     Example:
         >>> from freecad_mcp import get_mcp
-        >>> mcp = get_mcp()  # safe before or after main() starts
+        >>> mcp = get_mcp()  # only after main() starts; RuntimeError before
     """
     if mcp is None:
         raise RuntimeError(
@@ -605,8 +605,10 @@ def main() -> None:
                 config.http_host,
             )
 
-    # Create FastMCP with full configuration (including security)
-    mcp = FastMCP(
+    # Create FastMCP with full configuration (including security).
+    # Keep it local until components are registered so that a registration
+    # failure never publishes a partially initialized instance.
+    server = FastMCP(
         name="freecad-mcp",
         lifespan=lifespan,
         host=config.http_host,
@@ -615,31 +617,38 @@ def main() -> None:
         transport_security=transport_security,
     )
 
-    register_all_components(mcp)
+    register_all_components(server)
 
-    # Keep the package-level export synchronized so that
-    # ``import freecad_mcp; freecad_mcp.mcp`` returns the live instance.
+    # Publish the package-level export only after registration succeeded so
+    # that ``import freecad_mcp; freecad_mcp.mcp`` returns the live instance.
     # Callers that imported ``mcp`` before startup still hold the None
     # binding; they should use get_mcp() to resolve it at call time.
     import freecad_mcp
 
-    freecad_mcp.mcp = mcp
+    mcp = server
+    freecad_mcp.mcp = server
 
-    # Run the server
-    if config.transport == TransportType.HTTP:
-        logger.info(
-            "Starting HTTP transport on %s:%d", config.http_host, config.http_port
-        )
-        mcp.run(transport="streamable-http")
-    else:
-        logger.info("Starting stdio transport")
-        logger.info(
-            "Waiting for MCP client connection (FreeCAD connection tested on first request)..."
-        )
-        logger.info(
-            "Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly"
-        )
-        mcp.run()
+    # Run the server; clear both bindings when the transport ends (normal
+    # shutdown or failure) so get_mcp() never returns a stopped instance.
+    try:
+        if config.transport == TransportType.HTTP:
+            logger.info(
+                "Starting HTTP transport on %s:%d", config.http_host, config.http_port
+            )
+            server.run(transport="streamable-http")
+        else:
+            logger.info("Starting stdio transport")
+            logger.info(
+                "Waiting for MCP client connection (FreeCAD connection tested "
+                "on first request)..."
+            )
+            logger.info(
+                "Tip: Use 'freecad-mcp --check' to test FreeCAD connection directly"
+            )
+            server.run()
+    finally:
+        mcp = None
+        freecad_mcp.mcp = None
 
 
 if __name__ == "__main__":
