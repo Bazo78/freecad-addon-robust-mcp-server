@@ -52,10 +52,12 @@ class TestIsLoopbackHost:
         "host,expected",
         [
             ("127.0.0.1", True),
+            ("127.0.0.2", True),
             ("localhost", True),
             ("::1", True),
             ("0.0.0.0", False),  # noqa: S104
             ("192.168.1.100", False),
+            ("mcp.example.com", False),
         ],
     )
     def test_loopback_classification(self, host: str, expected: bool) -> None:
@@ -233,11 +235,14 @@ class TestRegisterAllComponents:
     """Tests for register_all_components function."""
 
     def test_registers_tools(self) -> None:
-        """Should register all tool categories on the provided instance."""
+        """Should register tools, resources and prompts on the instance."""
         from freecad_mcp.server import register_all_components
 
         mock_mcp = MagicMock()
         register_all_components(mock_mcp)
+        assert mock_mcp.tool.called
+        assert mock_mcp.resource.called
+        assert mock_mcp.prompt.called
 
 
 class TestApplyCliArgsToEnv:
@@ -368,7 +373,9 @@ class TestMain:
             assert ts is not None
             assert ts.enable_dns_rebinding_protection is True
             assert "127.0.0.1:*" in ts.allowed_hosts
+            assert "127.0.0.1" in ts.allowed_hosts
             assert "http://127.0.0.1:*" in ts.allowed_origins
+            assert "http://127.0.0.1" in ts.allowed_origins
 
             # Verify run() was called with HTTP transport
             mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
@@ -404,9 +411,13 @@ class TestMain:
             assert ts is not None
             assert ts.enable_dns_rebinding_protection is True
             assert "192.168.1.100:*" in ts.allowed_hosts
+            assert "192.168.1.100" in ts.allowed_hosts
             assert "10.0.0.1:*" in ts.allowed_hosts
+            assert "10.0.0.1" in ts.allowed_hosts
             assert "http://192.168.1.100:*" in ts.allowed_origins
+            assert "http://192.168.1.100" in ts.allowed_origins
             assert "http://10.0.0.1:*" in ts.allowed_origins
+            assert "http://10.0.0.1" in ts.allowed_origins
 
             mock_warning.assert_called_once()
             mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
@@ -441,7 +452,9 @@ class TestMain:
             assert ts.enable_dns_rebinding_protection is True
             # Loopback bind: IPv6 must be bracketed
             assert "[::1]:*" in ts.allowed_hosts
+            assert "[::1]" in ts.allowed_hosts
             assert "http://[::1]:*" in ts.allowed_origins
+            assert "http://[::1]" in ts.allowed_origins
 
             mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
 
@@ -475,10 +488,14 @@ class TestMain:
             assert ts is not None
             # IPv4 host
             assert "192.168.1.100:*" in ts.allowed_hosts
+            assert "192.168.1.100" in ts.allowed_hosts
             assert "http://192.168.1.100:*" in ts.allowed_origins
+            assert "http://192.168.1.100" in ts.allowed_origins
             # IPv6 host must be bracketed
             assert "[::2]:*" in ts.allowed_hosts
+            assert "[::2]" in ts.allowed_hosts
             assert "http://[::2]:*" in ts.allowed_origins
+            assert "http://[::2]" in ts.allowed_origins
 
             mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
 

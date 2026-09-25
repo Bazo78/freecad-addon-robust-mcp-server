@@ -32,6 +32,7 @@ Example:
 """
 
 import argparse
+import ipaddress
 import logging
 import os
 import sys
@@ -77,9 +78,16 @@ def is_loopback_host(host: str) -> bool:
         host: The bind address to check.
 
     Returns:
-        True for loopback addresses, False otherwise.
+        True for the ``localhost`` hostname and for any address in the
+        IPv4 (``127.0.0.0/8``) or IPv6 (``::1/128``) loopback ranges,
+        False for any other address or hostname.
     """
-    return host in {"127.0.0.1", "localhost", "::1"}
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _format_host(host: str) -> str:
@@ -132,10 +140,14 @@ def _build_transport_security(config: "ServerConfig") -> TransportSecuritySettin
     """
     if is_loopback_host(config.http_host):
         host = _format_host(config.http_host)
+        # Both the bare value and the port-wildcard form are required: MCP
+        # matches allowlist entries exactly, and clients omit the port for
+        # the default ports (80/443), so "host:*" alone rejects those
+        # requests with HTTP 421.
         return TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
-            allowed_hosts=[f"{host}:*"],
-            allowed_origins=[f"http://{host}:*"],
+            allowed_hosts=[host, f"{host}:*"],
+            allowed_origins=[f"http://{host}", f"http://{host}:*"],
         )
 
     # Non-loopback: require explicit allowlist
@@ -153,8 +165,15 @@ def _build_transport_security(config: "ServerConfig") -> TransportSecuritySettin
             "host in FREECAD_HTTP_ALLOWED_HOSTS."
         )
 
-    allowed_hosts = [f"{_format_host(h)}:*" for h in raw_hosts]
-    allowed_origins = [f"http://{_format_host(h)}:*" for h in raw_hosts]
+    # Emit both the bare authority and the port-wildcard form for each host:
+    # MCP matches allowlist entries exactly, and "host:*" only matches Host
+    # headers that carry a port (see mcp.server.transport_security).
+    allowed_hosts: list[str] = []
+    allowed_origins: list[str] = []
+    for raw_host in raw_hosts:
+        formatted = _format_host(raw_host)
+        allowed_hosts.extend([formatted, f"{formatted}:*"])
+        allowed_origins.extend([f"http://{formatted}", f"http://{formatted}:*"])
 
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
@@ -401,6 +420,9 @@ Environment Variables:
                          server remotely: put it behind authentication, TLS
                          or a trusted reverse proxy.
   FREECAD_HTTP_PORT      Port for HTTP transport (default: 8000)
+  FREECAD_HTTP_ALLOWED_HOSTS
+                         Comma-separated allowlist of Host/Origin values,
+                         required when FREECAD_HTTP_HOST is non-loopback
   FREECAD_LOG_LEVEL      Logging level: DEBUG, INFO, WARNING, ERROR
                          (default: INFO)
 
@@ -411,8 +433,13 @@ Examples:
   # Use socket mode
   FREECAD_MODE=socket freecad-mcp
 
-  # Use HTTP transport for remote access
+  # Use HTTP transport for local access (binds 127.0.0.1 only)
   FREECAD_TRANSPORT=http FREECAD_HTTP_PORT=8080 freecad-mcp
+
+  # Use HTTP transport for remote access (non-loopback bind needs an
+  # explicit host allowlist; see the security note on FREECAD_HTTP_HOST)
+  FREECAD_TRANSPORT=http FREECAD_HTTP_HOST=0.0.0.0 FREECAD_HTTP_PORT=8080 \\
+    FREECAD_HTTP_ALLOWED_HOSTS=mcp.example.com freecad-mcp
 
   # Connect to remote FreeCAD instance
   FREECAD_SOCKET_HOST=192.168.1.100 freecad-mcp
