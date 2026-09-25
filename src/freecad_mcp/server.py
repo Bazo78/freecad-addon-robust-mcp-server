@@ -95,10 +95,11 @@ def _format_host(host: str) -> str:
 
     IPv6 addresses in HTTP headers and URLs must be enclosed in square brackets
     (e.g. ``[::1]``) to avoid ambiguity with the colon-separated port syntax.
-    IPv4 addresses and hostnames are returned unchanged.
+    IPv4 addresses, hostnames, and explicit ``host:port`` values are returned
+    unchanged.
 
     Args:
-        host: A hostname, IPv4 address, or bare IPv6 address string.
+        host: A hostname, IPv4 address, bare IPv6 address, or host:port string.
 
     Returns:
         The formatted host string with brackets around IPv6 addresses.
@@ -111,18 +112,24 @@ def _format_host(host: str) -> str:
 def _is_ipv6(host: str) -> bool:
     """Detect whether a host string is a bare IPv6 address.
 
-    An address is considered IPv6 if it contains a colon. Already-bracketed
+    Detection uses :mod:`ipaddress` validation instead of checking for a
+    colon, so explicit ``host:port`` values (e.g. ``mcp.example.com:443``)
+    are not misclassified as IPv6 and wrapped in brackets. Already-bracketed
     addresses (e.g. ``[::1]``) are **not** detected as IPv6 by this helper;
     use :func:`_format_host` to apply brackets when needed.
 
     Args:
-        host: A hostname or IP address string.
+        host: A hostname, IP address, or ``host:port`` string.
 
     Returns:
-        ``True`` if *host* contains a colon (i.e. is an unbracketed IPv6 address),
-        ``False`` otherwise.
+        ``True`` if *host* is an unbracketed IPv6 address, ``False``
+        otherwise (including hostnames, IPv4 addresses, ``host:port``
+        values, and anything that does not parse as an IP address).
     """
-    return ":" in host
+    try:
+        return ipaddress.ip_address(host).version == 6
+    except ValueError:
+        return False
 
 
 def _build_transport_security(config: "ServerConfig") -> TransportSecuritySettings:
@@ -272,6 +279,35 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
 # Will be created in main() with full configuration.
 # None until main() runs.
 mcp: FastMCP | None = None
+
+
+def get_mcp() -> FastMCP:
+    """Return the live FastMCP instance created by :func:`main`.
+
+    The package-level ``mcp`` name is ``None`` until ``main()`` creates the
+    server. A ``from freecad_mcp import mcp`` performed before startup
+    captures that ``None`` binding and keeps it even after ``main()``
+    assigns the real instance, so importing the name directly can leave
+    callers with a stale value. This accessor resolves the module-level
+    binding at call time instead, so it always returns the running
+    instance once ``main()`` has created it.
+
+    Returns:
+        The FastMCP server instance.
+
+    Raises:
+        RuntimeError: If ``main()`` has not created the instance yet.
+
+    Example:
+        >>> from freecad_mcp import get_mcp
+        >>> mcp = get_mcp()  # safe before or after main() starts
+    """
+    if mcp is None:
+        raise RuntimeError(
+            "MCP server not initialized yet: freecad_mcp.server.mcp is None "
+            "until main() creates the FastMCP instance."
+        )
+    return mcp
 
 
 def register_all_components(fastmcp: FastMCP) -> None:
@@ -582,7 +618,9 @@ def main() -> None:
     register_all_components(mcp)
 
     # Keep the package-level export synchronized so that
-    # ``from freecad_mcp import mcp`` returns the live instance.
+    # ``import freecad_mcp; freecad_mcp.mcp`` returns the live instance.
+    # Callers that imported ``mcp`` before startup still hold the None
+    # binding; they should use get_mcp() to resolve it at call time.
     import freecad_mcp
 
     freecad_mcp.mcp = mcp

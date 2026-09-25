@@ -66,6 +66,91 @@ class TestIsLoopbackHost:
         assert is_loopback_host(host) is expected
 
 
+class TestFormatHost:
+    """Tests for _format_host / _is_ipv6 helpers."""
+
+    @pytest.mark.parametrize(
+        "host,expected_ipv6",
+        [
+            ("::1", True),
+            ("::2", True),
+            ("2001:db8::1", True),
+            ("mcp.example.com", False),
+            ("mcp.example.com:443", False),
+            ("192.168.1.100", False),
+            ("192.168.1.100:8080", False),
+            ("[::1]", False),
+        ],
+    )
+    def test_is_ipv6_detection(self, host: str, expected_ipv6: bool) -> None:
+        """IPv6 detection must validate the address, not look for a colon."""
+        from freecad_mcp.server import _is_ipv6
+
+        assert _is_ipv6(host) is expected_ipv6
+
+    @pytest.mark.parametrize(
+        "host,expected",
+        [
+            ("::1", "[::1]"),
+            ("::2", "[::2]"),
+            ("mcp.example.com", "mcp.example.com"),
+            # Explicit port values must not be wrapped in brackets:
+            # wrapping breaks the exact Host match in the MCP allowlist.
+            ("mcp.example.com:443", "mcp.example.com:443"),
+            ("192.168.1.100:8080", "192.168.1.100:8080"),
+            ("192.168.1.100", "192.168.1.100"),
+            # Already bracketed input is returned unchanged.
+            ("[::1]", "[::1]"),
+        ],
+    )
+    def test_format_host(self, host: str, expected: str) -> None:
+        """Only bare IPv6 addresses get brackets; host:port stays as-is."""
+        from freecad_mcp.server import _format_host
+
+        assert _format_host(host) == expected
+
+
+class TestGetMcp:
+    """Tests for the get_mcp accessor."""
+
+    def test_raises_before_initialization(self) -> None:
+        """Should raise RuntimeError while server.mcp is None."""
+        import freecad_mcp.server as server_module
+
+        original = server_module.mcp
+        try:
+            server_module.mcp = None
+            with pytest.raises(RuntimeError, match="not initialized yet"):
+                server_module.get_mcp()
+        finally:
+            server_module.mcp = original
+
+    def test_returns_live_instance_after_initialization(self) -> None:
+        """Should resolve the module binding at call time, not import time."""
+        import freecad_mcp.server as server_module
+
+        original = server_module.mcp
+        try:
+            server_module.mcp = None
+            # Resolve before initialization -> RuntimeError
+            with pytest.raises(RuntimeError):
+                server_module.get_mcp()
+            # Simulate main() creating the instance
+            sentinel = MagicMock()
+            server_module.mcp = sentinel
+            # Same caller, called again, now gets the live instance
+            assert server_module.get_mcp() is sentinel
+        finally:
+            server_module.mcp = original
+
+    def test_package_reexports_get_mcp(self) -> None:
+        """freecad_mcp.get_mcp must be the server accessor."""
+        import freecad_mcp
+        from freecad_mcp.server import get_mcp
+
+        assert freecad_mcp.get_mcp is get_mcp
+
+
 class TestGetBridge:
     """Tests for get_bridge function."""
 
@@ -496,6 +581,41 @@ class TestMain:
             assert "[::2]" in ts.allowed_hosts
             assert "http://[::2]:*" in ts.allowed_origins
             assert "http://[::2]" in ts.allowed_origins
+
+            mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
+
+    def test_main_http_transport_explicit_port_allowed_hosts(self) -> None:
+        """Explicit host:port allowlist values must not be bracketed as IPv6."""
+        import freecad_mcp.server as server_module
+        from freecad_mcp.config import TransportType
+
+        mock_config = MagicMock()
+        mock_config.log_level = "INFO"
+        mock_config.mode = FreecadMode.EMBEDDED
+        mock_config.transport = TransportType.HTTP
+        mock_config.http_host = "0.0.0.0"  # noqa: S104
+        mock_config.http_port = 8080
+        mock_config.http_allowed_hosts = "mcp.example.com:443"
+
+        mock_mcp_instance = MagicMock()
+
+        with (
+            patch.object(sys, "argv", DEFAULT_ARGV),
+            patch.object(server_module, "get_config", return_value=mock_config),
+            patch.object(
+                server_module, "FastMCP", return_value=mock_mcp_instance
+            ) as mock_fastmcp,
+            patch("builtins.print"),
+        ):
+            server_module.main()
+
+            call_kwargs = mock_fastmcp.call_args.kwargs
+            ts = call_kwargs["transport_security"]
+            assert ts is not None
+            # Exact value preserved: brackets would never match the Host header
+            assert "mcp.example.com:443" in ts.allowed_hosts
+            assert "http://mcp.example.com:443" in ts.allowed_origins
+            assert "[mcp.example.com:443]" not in ts.allowed_hosts
 
             mock_mcp_instance.run.assert_called_once_with(transport="streamable-http")
 
