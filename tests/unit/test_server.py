@@ -212,18 +212,26 @@ class TestGetMcp:
 
         mock_mcp_instance.run.side_effect = _capture_binding
 
-        with (
-            patch.object(sys, "argv", DEFAULT_ARGV),
-            patch.object(server_module, "get_config", return_value=mock_config),
-            patch.object(server_module, "FastMCP", return_value=mock_mcp_instance),
-            patch("builtins.print"),
-        ):
-            server_module.main()
+        # Restore whatever the bindings held before the test, including when an
+        # assertion below fails, so later tests do not depend on execution order.
+        original_server_mcp = server_module.mcp
+        original_package_mcp = freecad_mcp.mcp
+        try:
+            with (
+                patch.object(sys, "argv", DEFAULT_ARGV),
+                patch.object(server_module, "get_config", return_value=mock_config),
+                patch.object(server_module, "FastMCP", return_value=mock_mcp_instance),
+                patch("builtins.print"),
+            ):
+                server_module.main()
 
-        # Published while the transport ran, cleared after shutdown
-        assert captured and captured[0] is mock_mcp_instance
-        assert server_module.mcp is None
-        assert freecad_mcp.mcp is None
+            # Published while the transport ran, cleared after shutdown
+            assert captured and captured[0] is mock_mcp_instance
+            assert server_module.mcp is None
+            assert freecad_mcp.mcp is None
+        finally:
+            server_module.mcp = original_server_mcp
+            freecad_mcp.mcp = original_package_mcp
 
 
 class TestGetBridge:
